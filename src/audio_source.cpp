@@ -26,9 +26,15 @@ size_t audio_read(int16_t *dst, size_t frames, uint32_t timeout_ms) {
   return frames;
 }
 
+AudioClocks audio_measure_clocks(uint32_t window_ms) {
+  (void)window_ms;
+  return {0, 0};
+}
+
 #else
 
 #include <driver/i2s.h>
+#include <driver/pcnt.h>
 
 static const i2s_port_t kPort = I2S_NUM_0;
 
@@ -97,6 +103,57 @@ size_t audio_read(int16_t *dst, size_t frames, uint32_t timeout_ms) {
     dst[i] = (int16_t)(s_raw[i] >> 16);   // 24 бита -> 16 бит
   }
   return n;
+}
+
+// Счётчик импульсов: даёт понять, приходит ли вообще тактирование.
+// Окно короткое, чтобы 16-битный счётчик не переполнился на 3 МГц.
+AudioClocks audio_measure_clocks(uint32_t window_ms) {
+  if (window_ms == 0) window_ms = 4;
+
+  pcnt_config_t bck = {};
+  bck.pulse_gpio_num = PIN_I2S_BCK;
+  bck.ctrl_gpio_num  = PCNT_PIN_NOT_USED;
+  bck.lctrl_mode     = PCNT_MODE_KEEP;
+  bck.hctrl_mode     = PCNT_MODE_KEEP;
+  bck.pos_mode       = PCNT_COUNT_INC;
+  bck.neg_mode       = PCNT_COUNT_DIS;
+  bck.counter_h_lim  = 32000;
+  bck.counter_l_lim  = 0;
+  bck.unit           = PCNT_UNIT_0;
+  bck.channel        = PCNT_CHANNEL_0;
+
+  pcnt_config_t lrck = bck;
+  lrck.pulse_gpio_num = PIN_I2S_LRCK;
+  lrck.unit           = PCNT_UNIT_1;
+
+  if (pcnt_unit_config(&bck) != ESP_OK || pcnt_unit_config(&lrck) != ESP_OK) {
+    return {0, 0};
+  }
+  // Фильтр не включаем: 3 МГц он бы срезал.
+  pcnt_filter_disable(PCNT_UNIT_0);
+  pcnt_filter_disable(PCNT_UNIT_1);
+
+  pcnt_counter_pause(PCNT_UNIT_0);
+  pcnt_counter_pause(PCNT_UNIT_1);
+  pcnt_counter_clear(PCNT_UNIT_0);
+  pcnt_counter_clear(PCNT_UNIT_1);
+  pcnt_counter_resume(PCNT_UNIT_0);
+  pcnt_counter_resume(PCNT_UNIT_1);
+
+  delay(window_ms);
+
+  pcnt_counter_pause(PCNT_UNIT_0);
+  pcnt_counter_pause(PCNT_UNIT_1);
+
+  int16_t bckCount = 0;
+  int16_t lrckCount = 0;
+  pcnt_get_counter_value(PCNT_UNIT_0, &bckCount);
+  pcnt_get_counter_value(PCNT_UNIT_1, &lrckCount);
+
+  AudioClocks out;
+  out.bck_hz  = (uint32_t)bckCount * 1000u / window_ms;
+  out.lrck_hz = (uint32_t)lrckCount * 1000u / window_ms;
+  return out;
 }
 
 #endif  // AUDIO_SOURCE_TEST_TONE

@@ -1,5 +1,6 @@
 #include "streamer.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "config.h"
@@ -11,12 +12,53 @@ static void copyDeviceId(char (&dst)[16]) {
   memset(dst + len, 0, sizeof dst - len);
 }
 
+// Принимает "host", "host/", "http://host/path", "host:9100" —
+// возвращает чистое имя и порт (порт из строки важнее SERVER_PORT).
+static bool resolveTarget(char *host, size_t hostSize, uint16_t *port) {
+  const char *s = SERVER_HOST;
+  if (strncmp(s, "http://", 7) == 0) s += 7;
+  else if (strncmp(s, "https://", 8) == 0) s += 8;
+
+  char buf[96];
+  size_t n = 0;
+  while (*s && *s != '/' && *s != ' ') {
+    if (n + 1 >= sizeof buf) return false;
+    buf[n++] = *s++;
+  }
+  buf[n] = '\0';
+  if (n == 0) return false;
+
+  *port = SERVER_PORT;
+  char *colon = strrchr(buf, ':');
+  if (colon != nullptr && colon[1] != '\0') {
+    bool digits = true;
+    for (const char *p = colon + 1; *p; ++p) {
+      if (*p < '0' || *p > '9') { digits = false; break; }
+    }
+    if (digits) {
+      *port = (uint16_t)atoi(colon + 1);
+      *colon = '\0';
+    }
+  }
+
+  if (strlen(buf) >= hostSize) return false;
+  strcpy(host, buf);
+  return true;
+}
+
 bool AudioStreamer::connect() {
   disconnect();
 
-  Serial.printf("[net] подключение к %s:%u ... ", SERVER_HOST, (unsigned)SERVER_PORT);
+  char host[64];
+  uint16_t port = 0;
+  if (!resolveTarget(host, sizeof host, &port)) {
+    Serial.println("[net] некорректный SERVER_HOST");
+    return false;
+  }
+
+  Serial.printf("[net] подключение к %s:%u ... ", host, (unsigned)port);
   const uint32_t t0 = millis();
-  if (!client_.connect(SERVER_HOST, SERVER_PORT, CONNECT_TIMEOUT_MS)) {
+  if (!client_.connect(host, port, CONNECT_TIMEOUT_MS)) {
     Serial.println("не удалось");
     return false;
   }

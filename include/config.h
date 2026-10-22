@@ -1,17 +1,18 @@
 #pragma once
 
 // ============================== Wi-Fi ==============================
-#define WIFI_SSID       "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD   "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID       "OpenWrt9"
+#define WIFI_PASSWORD   "21051986"
 
 // ============================== Сервер =============================
-// Адрес машины, где запущен radio_record (без http:// и без порта).
-#define SERVER_HOST     "192.168.1.100"
-#define SERVER_PORT     9100
+// Адрес машины, где запущен radio_record. Схема, путь и порт в строке
+// отбрасываются автоматически, но лучше писать только имя/IP.
+#define SERVER_HOST     "radio-record.mldl.ru"
+#define SERVER_PORT     19100
 
 // Имя устройства: попадает в заголовок кадра и в имя каталога архива.
 // Максимум 15 символов (поле device_id в протоколе — 16 байт с \0).
-#define DEVICE_ID       "esp32-radio"
+#define DEVICE_ID       "moscow-autoradio"
 
 // =============================== Аудио =============================
 // PCM1808 в режиме мастера тактируется от собственного кварца 12.288 МГц,
@@ -25,15 +26,17 @@
 
 // Кто тактирует шину I2S:
 //   0 — PCM1808 (на модуле свой кварц, BCK/LRCK идут в ESP32, ESP32 — slave);
-//   1 — ESP32 (генерирует BCK/LRCK и MCLK 256*fs для PCM1808, ESP32 — master).
-#define I2S_ESP32_MASTER 0
+//   1 — ESP32 (генерирует BCK/LRCK и MCLK 256*fs = 12.288 МГц для PCM1808).
+// Для модуля со входом SCKI без своего кварца нужен режим 1:
+// MCLK -> SCKI, а MD0/MD1/FMT модуля посадить на GND (slave, I2S, 24 бита).
+#define I2S_ESP32_MASTER 1
 
 // =============================== Пины ==============================
-#define PIN_I2S_BCK     26      // <- BCK  (PCM1808)
-#define PIN_I2S_LRCK    25      // <- LRCK (PCM1808)
+#define PIN_I2S_BCK     26      // -> BCK  (PCM1808)
+#define PIN_I2S_LRCK    25      // -> LRCK (PCM1808)
 #define PIN_I2S_DATA    33      // <- DOUT (PCM1808)
-#define PIN_I2S_MCLK    0       // -> SCK  (только при I2S_ESP32_MASTER 1)
-
+#define PIN_I2S_MCLK    1       // -> SCKI (только при I2S_ESP32_MASTER 1)
+                                
 #define PIN_TUNER_RESET 12      // GPIO12 — strapping-пин, см. README
 #define PIN_TUNER_SDA   21
 #define PIN_TUNER_SCL   22
