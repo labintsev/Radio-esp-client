@@ -152,9 +152,10 @@ static void printStats() {
     Serial.printf("[i2s] данных нет %lu мс\n", (unsigned long)age);
 #else
     // Меряем прямо сейчас: видно, есть ли вообще клоки на линиях.
-    const AudioClocks clk = audio_measure_clocks(4);
-    Serial.printf("[i2s] данных нет %lu мс | BCK %lu Гц | LRCK %lu Гц\n",
+    const AudioClocks clk = audio_measure_clocks(2);
+    Serial.printf("[i2s] данных нет %lu мс | MCLK %lu | BCK %lu | LRCK %lu Гц\n",
                   (unsigned long)age,
+                  (unsigned long)clk.mclk_hz,
                   (unsigned long)clk.bck_hz, (unsigned long)clk.lrck_hz);
 #endif
   } else if (s_peak == 0) {
@@ -165,8 +166,9 @@ static void printStats() {
 // ========================= Проверка тактирования =======================
 #if !AUDIO_SOURCE_TEST_TONE
 static void audioPrintClocks() {
-  const AudioClocks clk = audio_measure_clocks(4);
-  Serial.printf("[i2s] BCK %lu Гц, LRCK %lu Гц\n",
+  const AudioClocks clk = audio_measure_clocks(2);
+  Serial.printf("[i2s] MCLK %lu Гц, BCK %lu Гц, LRCK %lu Гц\n",
+                (unsigned long)clk.mclk_hz,
                 (unsigned long)clk.bck_hz, (unsigned long)clk.lrck_hz);
 
   if (clk.lrck_hz == 0) {
@@ -179,7 +181,7 @@ static void audioPrintClocks() {
                   PIN_I2S_BCK, PIN_I2S_LRCK, PIN_I2S_DATA);
     Serial.println("      PCM1808 должен быть МАСТЕРОМ шины: кварц на модуле,");
     Serial.println("      перемычки MD0/MD1 — master, FMT — I2S.");
-    Serial.println("      Если модуль в slave — I2S_ESP32_MASTER 1 и MCLK -> SCK.");
+    Serial.println("      Если модуль в slave — I2S_ESP32_MASTER 1 и MCLK -> SCKI.");
 #endif
     return;
   }
@@ -187,6 +189,14 @@ static void audioPrintClocks() {
   const uint32_t bitsPerFrame = clk.bck_hz / clk.lrck_hz;
   Serial.printf("[i2s] фактическая fs %lu Гц, %lu бит/кадр\n",
                 (unsigned long)clk.lrck_hz, (unsigned long)bitsPerFrame);
+
+  if (clk.mclk_hz != 0) {
+    const uint32_t sckiRatio = clk.mclk_hz / clk.lrck_hz;
+    Serial.printf("[i2s] SCKI = %lu fs\n", (unsigned long)sckiRatio);
+    if (sckiRatio != 256 && sckiRatio != 384 && sckiRatio != 512) {
+      Serial.println("[i2s] ВНИМАНИЕ: PCM1808 ждёт SCKI 256/384/512 fs");
+    }
+  }
 
   const int32_t diff = (int32_t)clk.lrck_hz - (int32_t)SAMPLE_RATE;
   if (diff > (int32_t)(SAMPLE_RATE / 50) || diff < -(int32_t)(SAMPLE_RATE / 50)) {

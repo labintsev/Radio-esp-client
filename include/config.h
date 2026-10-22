@@ -15,14 +15,15 @@
 #define DEVICE_ID       "moscow-autoradio"
 
 // =============================== Аудио =============================
-// PCM1808 в режиме мастера тактируется от собственного кварца 12.288 МГц,
-// поэтому доступны 48/32/24 кГц (12.288M / 256, 384, 512 fs), но не 16 кГц.
-// Сервер запускайте с теми же параметрами:
-//   python -m radio_record --port 9100 --sample-rate 48000 --channels 2
-#define SAMPLE_RATE     48000
-#define CHANNELS        2
+// ESP32 — мастер шины и сам выдаёт SCKI = 256 fs = 4.096 МГц для 16 кГц.
+// PCM1808 в slave-режиме работает от 8 до 96 кГц, так что 16 кГц допустимы.
+// Сервер запускается с теми же параметрами (это его дефолт):
+//   python -m radio_record --port 9100 --sample-rate 16000 --channels 1
+#define SAMPLE_RATE     16000
+#define I2S_CHANNELS    2     // PCM1808 всегда отдаёт стерео
+#define CHANNELS        1     // каналов в кадре для сервера (1 = даунмикс L+R)
 #define FRAME_MS        20
-#define FRAME_SAMPLES   (SAMPLE_RATE * FRAME_MS / 1000)   // 960 кадров на канал
+#define FRAME_SAMPLES   (SAMPLE_RATE * FRAME_MS / 1000)   // 320
 
 // Кто тактирует шину I2S:
 //   0 — PCM1808 (на модуле свой кварц, BCK/LRCK идут в ESP32, ESP32 — slave);
