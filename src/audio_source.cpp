@@ -31,6 +31,10 @@ AudioClocks audio_measure_clocks(uint32_t window_ms) {
   return {0, 0, 0};
 }
 
+void audio_dump_raw(size_t words) {
+  (void)words;
+}
+
 #else
 
 #include <driver/i2s.h>
@@ -40,6 +44,26 @@ static const i2s_port_t kPort = I2S_NUM_0;
 
 // Сырые 32-битные слоты I2S. PCM1808 отдаёт 24 значащих бита, выровненных влево.
 static int32_t s_raw[FRAME_SAMPLES * I2S_CHANNELS];
+
+// Навешивает пины на I2S и (в master-режиме) заново выставляет клоки.
+// Нужна не только при установке драйвера, но и после audio_measure_clocks():
+// pcnt_unit_config() переводит GPIO в режим входа и отключает выход BCK/LRCK/MCLK.
+static esp_err_t i2sApplyPins() {
+  i2s_pin_config_t pins = {};
+  pins.mck_io_num   = I2S_ESP32_MASTER ? PIN_I2S_MCLK : I2S_PIN_NO_CHANGE;
+  pins.bck_io_num   = PIN_I2S_BCK;
+  pins.ws_io_num    = PIN_I2S_LRCK;
+  pins.data_out_num = I2S_PIN_NO_CHANGE;
+  pins.data_in_num  = PIN_I2S_DATA;
+
+  esp_err_t err = i2s_set_pin(kPort, &pins);
+#if I2S_ESP32_MASTER
+  if (err == ESP_OK) {
+    err = i2s_set_clk(kPort, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_STEREO);
+  }
+#endif
+  return err;
+}
 
 static esp_err_t i2sInstall(bool useApll) {
   i2s_config_t cfg = {};
@@ -58,17 +82,7 @@ static esp_err_t i2sInstall(bool useApll) {
   esp_err_t err = i2s_driver_install(kPort, &cfg, 0, nullptr);
   if (err != ESP_OK) return err;
 
-  i2s_pin_config_t pins = {};
-  pins.mck_io_num   = I2S_ESP32_MASTER ? PIN_I2S_MCLK : I2S_PIN_NO_CHANGE;
-  pins.bck_io_num   = PIN_I2S_BCK;
-  pins.ws_io_num    = PIN_I2S_LRCK;
-  pins.data_out_num = I2S_PIN_NO_CHANGE;
-  pins.data_in_num  = PIN_I2S_DATA;
-
-  err = i2s_set_pin(kPort, &pins);
-  if (err == ESP_OK && I2S_ESP32_MASTER) {
-    err = i2s_set_clk(kPort, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_STEREO);
-  }
+  err = i2sApplyPins();
   if (err != ESP_OK) i2s_driver_uninstall(kPort);
   return err;
 }
@@ -148,6 +162,15 @@ static uint32_t pcntStop(pcnt_unit_t unit, uint32_t window_ms) {
   return (uint32_t)count * 1000u / window_ms;
 }
 
+void audio_dump_raw(size_t words) {
+  Serial.print("[i2s] сырые слоты:");
+  const size_t limit = FRAME_SAMPLES * I2S_CHANNELS;
+  for (size_t i = 0; i < words && i < limit; ++i) {
+    Serial.printf(" %08lX", (unsigned long)s_raw[i]);
+  }
+  Serial.println();
+}
+
 AudioClocks audio_measure_clocks(uint32_t window_ms) {
   AudioClocks out{0, 0, 0};
   if (window_ms == 0) window_ms = 2;
@@ -156,6 +179,7 @@ AudioClocks audio_measure_clocks(uint32_t window_ms) {
   if (pcntStart(PCNT_UNIT_0, PIN_I2S_BCK) != ESP_OK ||
       pcntStart(PCNT_UNIT_1, PIN_I2S_LRCK) != ESP_OK ||
       pcntStart(PCNT_UNIT_2, PIN_I2S_MCLK) != ESP_OK) {
+    i2sApplyPins();
     return out;
   }
 
@@ -164,6 +188,11 @@ AudioClocks audio_measure_clocks(uint32_t window_ms) {
   out.mclk_hz = pcntStop(PCNT_UNIT_2, window_ms);
   delay(slowWindow - window_ms);
   out.lrck_hz = pcntStop(PCNT_UNIT_1, slowWindow);
+
+  // pcnt_unit_config() переводит измеряемые GPIO в режим входа и тем самым
+  // глушит выходы BCK/LRCK/MCLK: без повторного i2s_set_pin() PCM1808 остаётся
+  // без тактирования и отдаёт одни нули при живых кадрах.
+  i2sApplyPins();
   return out;
 }
 

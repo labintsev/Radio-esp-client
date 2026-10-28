@@ -56,11 +56,53 @@ static void wifiKeepAlive() {
 }
 
 // =============================== Тюнер ================================
+// Si4703 в 2-wire режиме живёт на адресе 0x10 (SEN -> GND).
+// Если чип не отвечает, библиотека PU2CLR зависает навсегда в
+// waitAndFinishTune(): неудачные чтения дают 0xFFFF, а STC (0Ah[14]) в этом
+// случае равен 1, и цикл "ждём сброса STC" не заканчивается. Поэтому наличие
+// устройства на шине проверяем до настройки частоты.
+static bool i2cProbe(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission() == 0;   // 0 = ACK
+}
+
+static void i2cScan() {
+  Serial.print("[i2c] устройства на шине:");
+  bool any = false;
+  for (uint8_t addr = 1; addr < 127; ++addr) {
+    if (i2cProbe(addr)) {
+      Serial.printf(" 0x%02X", addr);
+      any = true;
+    }
+  }
+  if (!any) Serial.print(" нет");
+  Serial.println();
+}
+
 static void tunerInit() {
   Serial.println("[tuner] инициализация Si470x...");
-  Wire.begin(PIN_TUNER_SDA, PIN_TUNER_SCL);
+
+  // SI470X::setup() вызывает Wire.begin() без аргументов и взял бы пины по
+  // умолчанию из варианта платы, поэтому задаём их через setPins() до него.
+  Wire.setPins(PIN_TUNER_SDA, PIN_TUNER_SCL);
+  Wire.setTimeOut(50);
+
+  // Пока Si4703 не прошёл reset, его I2C-интерфейс выключен и он не отвечает.
+  pinMode(PIN_TUNER_RESET, OUTPUT);
+  digitalWrite(PIN_TUNER_RESET, HIGH);
+  delay(10);
 
   tuner.setup(PIN_TUNER_RESET, PIN_TUNER_SDA);
+
+  if (!i2cProbe(0x10)) {
+    Serial.printf("[tuner] нет ответа на 0x10: SDA=GPIO%d, SCL=GPIO%d, RST=GPIO%d, "
+                  "SEN -> GND, питание 3.3 В\n",
+                  PIN_TUNER_SDA, PIN_TUNER_SCL, PIN_TUNER_RESET);
+    i2cScan();
+    Serial.println("[tuner] настройка пропущена (иначе setFrequency() зависнет)");
+    return;
+  }
+
   tuner.setVolume(TUNER_VOLUME);
   tuner.setMono(TUNER_MONO);
   tuner.setFrequency(TUNER_FREQUENCY);
@@ -147,24 +189,44 @@ static void printStats() {
                 (unsigned)ESP.getFreeHeap());
 
   const uint32_t age = now - s_lastDataMs;
-  if (age > 3000) {
+  // s_lastDataMs пишет аудио-задача: без знака гонка даёт «данных нет 4294967288 мс».
+  const int32_t ageSigned = (int32_t)age;
+
+  if (ageSigned > 3000) {
 #if AUDIO_SOURCE_TEST_TONE
-    Serial.printf("[i2s] данных нет %lu мс\n", (unsigned long)age);
+    Serial.printf("[i2s] данных нет %lu мс\n", (unsigned long)ageSigned);
 #else
-    // Меряем прямо сейчас: видно, есть ли вообще клоки на линиях.
+#if AUDIO_CLOCK_DIAG
+    // PCNT переводит измеряемые GPIO в режим входа, то есть на время замера
+    // глушит выходы BCK/LRCK/MCLK — по умолчанию замер отключён.
     const AudioClocks clk = audio_measure_clocks(2);
-    Serial.printf("[i2s] данных нет %lu мс | MCLK %lu | BCK %lu | LRCK %lu Гц\n",
-                  (unsigned long)age,
+    Serial.printf("[i2s] данных нет %ld мс | MCLK %lu | BCK %lu | LRCK %lu Гц\n",
+                  (long)ageSigned,
                   (unsigned long)clk.mclk_hz,
                   (unsigned long)clk.bck_hz, (unsigned long)clk.lrck_hz);
+#else
+    Serial.printf("[i2s] данных нет %ld мс\n", (long)ageSigned);
+#endif
 #endif
   } else if (s_peak == 0) {
-    Serial.println("[i2s] кадры идут, но все сэмплы нулевые: проверьте DOUT и вход АЦП");
+    Serial.printf("[i2s] кадры идут, но все сэмплы нулевые: DOUT -> GPIO%d", PIN_I2S_DATA);
+#if I2S_ESP32_MASTER
+    Serial.printf(", SCKI -> GPIO%d", PIN_I2S_MCLK);
+#endif
+    Serial.println(", проверьте вход АЦП");
+
+    // Первые три раза показываем сырые слоты: 00000000 — линия молчит
+    // (DOUT/SCKI не туда), иные значения — АЦП отдаёт данные, но тишину.
+    static uint8_t zeroDumps = 0;
+    if (zeroDumps < 3) {
+      ++zeroDumps;
+      audio_dump_raw(8);
+    }
   }
 }
 
 // ========================= Проверка тактирования =======================
-#if !AUDIO_SOURCE_TEST_TONE
+#if !AUDIO_SOURCE_TEST_TONE && AUDIO_CLOCK_DIAG
 static void audioPrintClocks() {
   const AudioClocks clk = audio_measure_clocks(2);
   Serial.printf("[i2s] MCLK %lu Гц, BCK %lu Гц, LRCK %lu Гц\n",
@@ -224,11 +286,12 @@ void setup() {
   }
 
 #if !AUDIO_SOURCE_TEST_TONE
-  // Один холостой read запускает генератор клоков в master-режиме,
-  // после чего можно измерить, что реально приходит на BCK/LRCK.
+  // Один холостой read запускает генератор клоков в master-режиме.
   static int16_t bootBuf[FRAME_SAMPLES * CHANNELS];
   audio_read(bootBuf, FRAME_SAMPLES, 50);
+#if AUDIO_CLOCK_DIAG
   audioPrintClocks();
+#endif
 #endif
 
   // Аудио — на core 1 (там же, где loop, но с более высоким приоритетом),

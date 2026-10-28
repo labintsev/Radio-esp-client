@@ -23,3 +23,7 @@ size_t audio_read(int16_t *dst, size_t frames, uint32_t timeout_ms);
 // Вызывать после audio_init(): в master-режиме ESP32 генерирует клоки только
 // после первого запуска чтения.
 AudioClocks audio_measure_clocks(uint32_t window_ms);
+
+// Печатает первые `words` сырых 32-битных слотов последнего прочитанного блока
+// (отладка DOUT: 00000000 — линия молчит, иное — АЦП что-то отдаёт).
+void audio_dump_raw(size_t words);
