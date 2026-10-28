@@ -33,14 +33,17 @@
 #define I2S_ESP32_MASTER 1
 
 // =============================== Пины ==============================
-#define PIN_I2S_BCK     26      // -> BCK  (PCM1808)
-#define PIN_I2S_LRCK    25      // -> LRCK (PCM1808)
-#define PIN_I2S_DATA    33      // <- DOUT (PCM1808)
-#define PIN_I2S_MCLK    1       // -> SCKI (только при I2S_ESP32_MASTER 1)
-                                
-#define PIN_TUNER_RESET 12      // GPIO12 — strapping-пин, см. README
-#define PIN_TUNER_SDA   21
-#define PIN_TUNER_SCL   22
+// ESP32-S3 N16R8: нельзя занимать GPIO26..37 (flash и octal-PSRAM),
+// GPIO19/20 (нативный USB) и strapping-пины 0/3/45/46.
+// Вся шина PCM1808 умеет работать на любых GPIO (matrix), включая MCLK.
+#define PIN_I2S_BCK     4       // -> BCK  (PCM1808)
+#define PIN_I2S_LRCK    5       // -> LRCK (PCM1808)
+#define PIN_I2S_DATA    6       // <- DOUT (PCM1808)
+#define PIN_I2S_MCLK    7       // -> SCKI (только при I2S_ESP32_MASTER 1)
+
+#define PIN_TUNER_RESET 10
+#define PIN_TUNER_SDA   8
+#define PIN_TUNER_SCL   9
 
 // =============================== Тюнер =============================
 #define TUNER_FREQUENCY 9030    // 90.3 МГц, шаг 10 кГц
