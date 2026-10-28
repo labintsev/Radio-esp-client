@@ -108,6 +108,18 @@ bool audio_init() {
   return true;
 }
 
+// Цифровое усиление с ограничением. PCM1808 в этой схеме отдаёт очень тихий
+// сигнал (пик 150…950 из 32767 ≈ −45…−30 dBFS), без усиления запись почти
+// не слышно. AUDIO_GAIN = 1 — усиления нет, больше 16 — уже слышно шум.
+static inline int16_t applyGain(int32_t v) {
+#if AUDIO_GAIN > 1
+  v *= AUDIO_GAIN;
+  if (v > 32767) return 32767;
+  if (v < -32768) return -32768;
+#endif
+  return (int16_t)v;
+}
+
 size_t audio_read(int16_t *dst, size_t frames, uint32_t timeout_ms) {
   if (frames > FRAME_SAMPLES) frames = FRAME_SAMPLES;
 
@@ -121,10 +133,10 @@ size_t audio_read(int16_t *dst, size_t frames, uint32_t timeout_ms) {
     const int32_t l = s_raw[f * I2S_CHANNELS + 0] >> 16;   // 24 бита -> 16 бит
 #if CHANNELS == 1
     const int32_t r = s_raw[f * I2S_CHANNELS + 1] >> 16;
-    dst[f] = (int16_t)((l + r) / 2);                       // даунмикс L+R
+    dst[f] = applyGain((l + r) / 2);                       // даунмикс L+R
 #else
-    dst[f * 2 + 0] = (int16_t)l;
-    dst[f * 2 + 1] = (int16_t)(s_raw[f * I2S_CHANNELS + 1] >> 16);
+    dst[f * 2 + 0] = applyGain(l);
+    dst[f * 2 + 1] = applyGain(s_raw[f * I2S_CHANNELS + 1] >> 16);
 #endif
   }
   return n;
